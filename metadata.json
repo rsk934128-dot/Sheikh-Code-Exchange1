@@ -1,0 +1,6 @@
+{
+  "name": "Sheikh Code Exchange",
+  "description": "An interactive Telegram Wallet Transfer simulation with user linking, P2P transfers, TWA dashboard simulator, robust audit log trail with rollback support, and Google Drive backups.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
