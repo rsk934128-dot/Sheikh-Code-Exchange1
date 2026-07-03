@@ -26,8 +26,11 @@ import {
   Info,
   ChevronRight,
   HelpCircle,
-  Clock
+  Clock,
+  QrCode,
+  Copy
 } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { initAuth, googleSignIn, logout, getAccessToken } from './auth';
 import { listBackups, createBackup, getBackupContent, deleteBackup, uploadInvoice, DriveFile } from './drive';
 import { generateInvoicePDFBlob } from './pdfGenerator';
@@ -168,10 +171,12 @@ export default function App() {
   const [isTwaOpen, setIsTwaOpen] = useState<boolean>(false);
   const [twaRecipientId, setTwaRecipientId] = useState<string>('');
   const [twaAmount, setTwaAmount] = useState<string>('');
-  const [twaStep, setTwaStep] = useState<'main' | 'send' | 'confirming' | 'success' | 'error'>('main');
+  const [twaRequestAmount, setTwaRequestAmount] = useState<string>('');
+  const [twaStep, setTwaStep] = useState<'main' | 'send' | 'receive' | 'confirming' | 'success' | 'error'>('main');
   const [twaTxLogs, setTwaTxLogs] = useState<string[]>([]);
   const [twaError, setTwaError] = useState<string>('');
   const [twaSuccessTxId, setTwaSuccessTxId] = useState<string>('');
+  const [copiedAddress, setCopiedAddress] = useState<boolean>(false);
 
   // Firebase Google Auth / Google Drive state
   const [googleUser, setGoogleUser] = useState<FirebaseUser | null>(null);
@@ -931,6 +936,8 @@ export default function App() {
     setTwaStep('main');
     setTwaAmount('');
     setTwaRecipientId('');
+    setTwaRequestAmount('');
+    setCopiedAddress(false);
     setTwaError('');
     setIsTwaOpen(true);
   };
@@ -1027,6 +1034,87 @@ export default function App() {
         );
       }
     }, 3400);
+  };
+
+  const handleSimulateReceive = async (requestedAmountStr: string) => {
+    const amountNum = parseFloat(requestedAmountStr) || 250;
+    if (amountNum <= 0) {
+      showNotification('সঠিক পরিমাণ নির্ধারণ করুন', 'error');
+      return;
+    }
+
+    setTwaStep('confirming');
+    setTwaTxLogs([]);
+    const addTwaLog = (txt: string) => {
+      setTwaTxLogs(prev => [...prev, txt]);
+    };
+
+    // Find sender: activeUser is the recipient
+    const simulatedSender = users.find(u => u.id !== activeUser.id) || users[0];
+
+    addTwaLog(`[Simulation] Scan detected from user: ${simulatedSender.username}`);
+
+    setTimeout(() => {
+      addTwaLog(`✓ Scan Success: sheikhpay request parsed`);
+    }, 500);
+
+    setTimeout(() => {
+      addTwaLog(`✓ Request details: To ${activeUser.username}, Amount: ${amountNum} BDT`);
+    }, 1100);
+
+    setTimeout(() => {
+      addTwaLog(`✓ Row lock acquired on sender: ${simulatedSender.username}`);
+    }, 1700);
+
+    setTimeout(() => {
+      addTwaLog(`✓ Initiating balance transfer of ${amountNum} BDT`);
+    }, 2300);
+
+    setTimeout(() => {
+      // Perform the transfer from simulatedSender to activeUser
+      setUsers(prev => prev.map(u => {
+        if (u.id === simulatedSender.id) {
+          return { ...u, telegramBalance: Math.max(0, u.telegramBalance - amountNum) };
+        }
+        if (u.id === activeUser.id) {
+          return { ...u, telegramBalance: u.telegramBalance + amountNum };
+        }
+        return u;
+      }));
+
+      const newTxId = crypto.randomUUID();
+      const newLog: AuditLog = {
+        tx_id: newTxId,
+        senderName: `${simulatedSender.name} (Telegram Wallet)`,
+        senderUsername: simulatedSender.username,
+        receiverName: `${activeUser.name} (Telegram Wallet)`,
+        receiverUsername: activeUser.username,
+        amount: amountNum,
+        status: 'SUCCESS',
+        timestamp: new Date().toISOString(),
+        note: 'P2P Transfer via TWA QR Request Scan'
+      };
+
+      setAuditLogs(prev => [newLog, ...prev]);
+      handleAutoSaveInvoice(newLog);
+
+      setTwaSuccessTxId(newTxId);
+      setTwaStep('success');
+
+      // Add messages to simulated Bot chat log
+      if (simulatedSender.linked) {
+        addBotMessage(
+          simulatedSender.id,
+          `📲 আপনি ${activeUser.name}-এর QR কোড স্ক্যান করে ${amountNum} BDT পাঠিয়েছেন!\nট্রানজ্যাকশন আইডি:\n${newTxId}`
+        );
+      }
+      if (activeUser.linked) {
+        addBotMessage(
+          activeUser.id,
+          `💰 অভিনন্দন! ${simulatedSender.name} আপনার QR কোড স্ক্যান করে ${amountNum} BDT পাঠিয়েছেন।`
+        );
+      }
+    }, 3000);
   };
 
   return (
@@ -1283,20 +1371,30 @@ export default function App() {
                         <div className="absolute top-0 right-0 h-24 w-24 bg-indigo-500/5 rounded-full blur-2xl pointer-events-none" />
                         <span className="text-[10px] text-indigo-300 font-extrabold tracking-widest uppercase block mb-1">টেলিগ্রাম ওয়ালেট ব্যালেন্স</span>
                         <h2 className="text-2xl font-black text-white font-mono">{activeUser.telegramBalance.toLocaleString('bn-BD')}.00 BDT</h2>
-                        <div className="flex justify-center gap-4 mt-5 pt-4 border-t border-indigo-500/10">
+                        <div className="grid grid-cols-3 gap-2 mt-5 pt-4 border-t border-indigo-500/10">
                           <button
                             onClick={() => setTwaStep('send')}
-                            className="bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold py-2 px-4 rounded-xl flex items-center gap-1.5 transition-all shadow-md shadow-indigo-600/10 cursor-pointer"
+                            className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] sm:text-[11px] font-bold py-2.5 px-1.5 rounded-xl flex items-center justify-center gap-1 transition-all shadow-md shadow-indigo-600/10 cursor-pointer"
                           >
-                            <Send className="h-3.5 w-3.5" /> টাকা পাঠান
+                            <Send className="h-3.5 w-3.5 shrink-0" /> পাঠান
+                          </button>
+                          <button
+                            onClick={() => {
+                              setTwaStep('receive');
+                              setTwaRequestAmount('');
+                              setCopiedAddress(false);
+                            }}
+                            className="bg-[#121A31] hover:bg-indigo-950/60 text-indigo-400 hover:text-indigo-300 border border-indigo-500/20 text-[10px] sm:text-[11px] font-bold py-2.5 px-1.5 rounded-xl flex items-center justify-center gap-1 transition-all cursor-pointer"
+                          >
+                            <QrCode className="h-3.5 w-3.5 shrink-0" /> গ্রহণ
                           </button>
                           <button
                             onClick={() => {
                               showNotification('TWA ড্যাশবোর্ড রিফ্রেশ করা হয়েছে!');
                             }}
-                            className="bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 text-[11px] font-bold py-2 px-3.5 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer"
+                            className="bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 text-[10px] sm:text-[11px] font-bold py-2.5 px-1.5 rounded-xl flex items-center justify-center gap-1 transition-all cursor-pointer"
                           >
-                            <RefreshCw className="h-3.5 w-3.5" /> রিফ্রেশ
+                            <RefreshCw className="h-3.5 w-3.5 shrink-0" /> রিফ্রেশ
                           </button>
                         </div>
                       </div>
@@ -1366,6 +1464,100 @@ export default function App() {
                           </button>
                         </div>
                       </form>
+                    </div>
+                  )}
+
+                  {twaStep === 'receive' && (
+                    <div className="space-y-4 animate-fade-in text-center">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-2 text-left">
+                        <h5 className="font-extrabold text-slate-200 text-xs tracking-wider uppercase">টাকা গ্রহণ করুন (Receive Balance)</h5>
+                        <button
+                          onClick={() => setTwaStep('main')}
+                          className="text-[10px] text-slate-400 hover:text-slate-200"
+                        >
+                          বন্ধ করুন
+                        </button>
+                      </div>
+
+                      {/* Display QR code */}
+                      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-4 max-w-xs mx-auto">
+                        <div className="p-3 bg-white rounded-2xl inline-block shadow-lg mx-auto relative group">
+                          <QRCodeSVG
+                            value={`sheikhpay:transfer?to=${activeUser.username}&id=${activeUser.telegramId}${twaRequestAmount ? `&amount=${twaRequestAmount}` : ''}`}
+                            size={160}
+                            bgColor="#ffffff"
+                            fgColor="#0a0d17"
+                            level="M"
+                            includeMargin={true}
+                          />
+                        </div>
+
+                        {/* User Address Label */}
+                        <div className="space-y-1">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">আপনার ওয়ালেট এড্রেস (Username)</span>
+                          <div className="bg-[#0c0e18] px-3 py-2 rounded-xl border border-slate-800 flex items-center justify-between gap-2 max-w-full overflow-hidden">
+                            <span className="font-mono text-xs text-indigo-300 truncate">{activeUser.username}</span>
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(activeUser.username);
+                                setCopiedAddress(true);
+                                showNotification('ওয়ালেট ইউজারনেম কপি করা হয়েছে!', 'success');
+                                setTimeout(() => setCopiedAddress(false), 2000);
+                              }}
+                              className="text-slate-400 hover:text-indigo-400 transition-colors shrink-0 p-1"
+                              title="Copy username"
+                            >
+                              {copiedAddress ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Request Amount Input */}
+                      <div className="text-left space-y-1.5">
+                        <label className="block text-[10px] text-slate-400 font-bold uppercase tracking-wider">টাকার পরিমাণ নির্ধারণ করুন (ঐচ্ছিক):</label>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            value={twaRequestAmount}
+                            onChange={(e) => setTwaRequestAmount(e.target.value)}
+                            placeholder="যেমন: ২৫০"
+                            className="w-full bg-[#141A2E] border border-slate-800 rounded-xl p-2.5 pr-12 text-xs font-semibold text-slate-200 focus:outline-none focus:border-indigo-500"
+                          />
+                          <span className="absolute right-3.5 top-1/2 transform -translate-y-1/2 text-[10px] font-bold text-slate-500">BDT</span>
+                        </div>
+                        <p className="text-[9px] text-slate-500 italic">পরিমাণ সেট করলে QR কোডটি স্বয়ংক্রিয়ভাবে আপডেট হয়ে যাবে যা দ্রুত অর্থ পরিশোধে সাহায্য করে।</p>
+                      </div>
+
+                      {/* Simulated Interactive Scan Trigger */}
+                      <div className="bg-indigo-950/20 border border-indigo-500/10 rounded-xl p-3 text-left space-y-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="flex h-2 w-2 relative">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                          </span>
+                          <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-wider">স্যান্ডবক্স টেস্ট করুন (Simulate Scanner)</span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 leading-normal">
+                          অন্য অ্যাকাউন্ট থেকে এই QR কোডটি স্বয়ংক্রিয়ভাবে স্ক্যান করার প্রক্রিয়া সিমুলেট করুন।
+                        </p>
+                        <button
+                          onClick={() => handleSimulateReceive(twaRequestAmount)}
+                          className="w-full bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 text-white font-bold text-xs py-2.5 rounded-xl flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/10 transition-all cursor-pointer"
+                        >
+                          <QrCode className="h-3.5 w-3.5" /> সিমুলেট রিসিভ স্ক্যান
+                        </button>
+                      </div>
+
+                      <div className="flex gap-2.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setTwaStep('main')}
+                          className="w-full bg-slate-850 hover:bg-slate-800 text-slate-300 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer"
+                        >
+                          ড্যাশবোর্ডে ফিরুন
+                        </button>
+                      </div>
                     </div>
                   )}
 

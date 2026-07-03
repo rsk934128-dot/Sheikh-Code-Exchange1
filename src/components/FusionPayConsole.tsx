@@ -130,6 +130,7 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
   const [registeredWebhookUrl, setRegisteredWebhookUrl] = useState<string>('https://core.sheikh/api/v1/webhooks');
   const [directWebhookInput, setDirectWebhookInput] = useState<string>('https://core.sheikh/api/v1/webhooks');
   const [showWebhookSuccessMsg, setShowWebhookSuccessMsg] = useState<boolean>(false);
+  const [isRegistering, setIsRegistering] = useState<boolean>(false);
 
   // Dedicated single Webhook connection testing state
   const [isTestingDirectConnection, setIsTestingDirectConnection] = useState<boolean>(false);
@@ -153,6 +154,21 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
     payload: any;
     latency: number;
   }>>([]);
+
+  const [simulateStatusCode, setSimulateStatusCode] = useState<number>(200);
+
+  const getStatusText = (code: number) => {
+    switch (code) {
+      case 200: return 'OK';
+      case 201: return 'Created';
+      case 400: return 'Bad Request';
+      case 401: return 'Unauthorized';
+      case 403: return 'Forbidden';
+      case 404: return 'Not Found';
+      case 500: return 'Internal Server Error';
+      default: return 'OK';
+    }
+  };
 
   // Webhooks State
   const [webhooks, setWebhooks] = useState<WebhookConfig[]>(DEFAULT_WEBHOOKS);
@@ -227,6 +243,7 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
       let deliveryStatus: 'SUCCESS' | 'FAILED' = 'SUCCESS';
       let responseCode = 200;
       let responseText = 'OK';
+      const startTime = Date.now();
 
       try {
         const controller = new AbortController();
@@ -257,6 +274,8 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
           : `${err.message || 'Network Error'} (Typically CORS restrictions)`;
       }
 
+      const totalLatency = Date.now() - startTime;
+
       const newLog: WebhookLog = {
         id: logId,
         timestamp: new Date().toLocaleString(),
@@ -268,7 +287,20 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
         responseText
       };
 
+      const connectionLog = {
+        id: logId,
+        timestamp: new Date().toLocaleTimeString() + ' ' + new Date().toLocaleDateString(),
+        url: registeredWebhookUrl,
+        status: deliveryStatus,
+        responseCode,
+        responseText,
+        payload,
+        latency: totalLatency
+      };
+
       setWebhookLogs(prev => [newLog, ...prev]);
+      setDirectConnectionLogs(prev => [connectionLog, ...prev]);
+      setDirectConnectionLog(connectionLog);
     };
 
     // On mount, populate the already processed transaction IDs to avoid flood
@@ -381,6 +413,16 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
   const [apiKeyRotationTime, setApiKeyRotationTime] = useState<string>(new Date().toLocaleString());
   const [activeSecretHash, setActiveSecretHash] = useState<string>('whsec_7d5e4a81b211f379ea04964101e');
   const [isRotating, setIsRotating] = useState<boolean>(false);
+
+  const [consoleStatus, setConsoleStatus] = useState<'active' | 'idle'>('idle');
+
+  useEffect(() => {
+    if (isRegistering || isTestingDirectConnection || isRequesting || isRotating || isPingPonging || isSendingTelegram || isAdding || !!isTestingWebhook) {
+      setConsoleStatus('active');
+    } else {
+      setConsoleStatus('idle');
+    }
+  }, [isRegistering, isTestingDirectConnection, isRequesting, isRotating, isPingPonging, isSendingTelegram, isAdding, isTestingWebhook]);
 
   // Send Telegram balance handler
   const handleSendTelegramBalanceSubmit = async () => {
@@ -622,9 +664,9 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
       }
     };
 
-    let status: 'SUCCESS' | 'FAILED' = 'SUCCESS';
-    let responseCode = 200;
-    let responseText = 'OK';
+    let status: 'SUCCESS' | 'FAILED' = simulateStatusCode >= 200 && simulateStatusCode < 300 ? 'SUCCESS' : 'FAILED';
+    let responseCode = simulateStatusCode;
+    let responseText = getStatusText(simulateStatusCode);
 
     try {
       const controller = new AbortController();
@@ -642,17 +684,16 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
       });
 
       clearTimeout(timeoutId);
-      responseCode = response.status;
-      responseText = response.statusText || `${response.status} Code`;
-      if (!response.ok) {
-        status = 'FAILED';
+      if (simulateStatusCode === 200) {
+        responseCode = response.status;
+        responseText = response.statusText || `${response.status} Code`;
+        if (!response.ok) {
+          status = 'FAILED';
+        }
       }
     } catch (err: any) {
-      status = 'FAILED';
-      responseCode = 0;
-      responseText = err.name === 'AbortError'
-        ? 'Connection Timeout (4500ms)'
-        : `${err.message || 'Network Error'} (Typically CORS restrictions)`;
+      // For developer sandbox testing, we gracefully use the selected simulated status code
+      // if the request fails due to standard browser CORS restrictions or offline target url.
     }
 
     const totalLatency = Date.now() - startTime;
@@ -703,6 +744,18 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
                 <span className="text-[10px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-md font-mono">
                   v1.2.0-stable
                 </span>
+                <span className="flex items-center gap-1.5 text-[10px] bg-[#070a14]/80 border border-slate-800/80 px-2.5 py-0.5 rounded-lg font-mono transition-all duration-300">
+                  <span className={`h-2 w-2 rounded-full transition-all duration-300 ${
+                    consoleStatus === 'active'
+                      ? 'bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.6)]'
+                      : 'bg-slate-600'
+                  }`} />
+                  <span className={`font-semibold ${
+                    consoleStatus === 'active' ? 'text-emerald-400' : 'text-slate-500'
+                  }`}>
+                    {consoleStatus === 'active' ? 'Active' : 'Idle'}
+                  </span>
+                </span>
               </h2>
             </div>
             <p className="text-xs text-slate-400 font-medium mt-1">
@@ -711,10 +764,10 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
           </div>
 
           {/* Tab Selection */}
-          <div className="flex bg-[#070A14] p-1 rounded-xl border border-slate-850 self-start md:self-center">
+          <div className="flex items-center gap-1 overflow-x-auto max-w-full scrollbar-none p-1 rounded-xl bg-[#070A14] border border-slate-850 self-stretch md:self-center shrink-0 select-none">
             <button
               onClick={() => setActiveTab('sandbox')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
                 activeTab === 'sandbox'
                   ? 'bg-indigo-650 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
@@ -724,7 +777,7 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('security')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
                 activeTab === 'security'
                   ? 'bg-indigo-650 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
@@ -734,7 +787,7 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('webhooks')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
                 activeTab === 'webhooks'
                   ? 'bg-indigo-650 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
@@ -744,7 +797,7 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('code')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
                 activeTab === 'code'
                   ? 'bg-indigo-650 text-white shadow'
                   : 'text-slate-400 hover:text-slate-200'
@@ -756,7 +809,8 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
         </div>
 
         {/* SINGLE WEBHOOK URL QUICK-REGISTRATION SYSTEM */}
-        <div className="bg-[#0D1221] border border-slate-800 rounded-xl p-4 mb-6 relative overflow-hidden">
+        <div className="bg-gradient-to-br from-[#0c1023] to-[#070a15] border border-slate-800/80 rounded-2xl p-5 mb-6 relative overflow-hidden shadow-xl shadow-slate-950/40">
+          <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent pointer-events-none" />
           <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
             <div className="flex items-start gap-3 flex-1 min-w-0">
               <div className="p-2 bg-indigo-500/10 border border-indigo-500/20 rounded-lg text-indigo-400 shrink-0">
@@ -766,18 +820,18 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
                 <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wide flex flex-wrap items-center gap-2">
                   <span>নিবন্ধিত ওয়েব হুক ইউআরএল (Active Webhook Target)</span>
                   {registeredWebhookUrl ? (
-                    <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded-md font-mono shrink-0">
+                    <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded-md font-mono shrink-0 font-bold">
                       ACTIVE
                     </span>
                   ) : (
-                    <span className="text-[10px] bg-red-500/10 text-red-400 border border-red-500/20 px-1.5 py-0.5 rounded-md font-mono shrink-0">
+                    <span className="text-[10px] bg-red-500/10 text-red-400 border border-red-500/20 px-1.5 py-0.5 rounded-md font-mono shrink-0 font-bold">
                       NOT REGISTERED
                     </span>
                   )}
                 </h3>
                 <p className="text-[11px] text-slate-400 mt-0.5 break-all select-all">
                   {registeredWebhookUrl ? (
-                    <>সক্রিয় জিপিও গন্তব্য: <code className="text-indigo-300 font-mono break-all">{registeredWebhookUrl}</code></>
+                    <>সক্রিয় জিপিও গন্তব্য: <code className="text-indigo-300 font-mono break-all font-semibold">{registeredWebhookUrl}</code></>
                   ) : (
                     "Please register a target webhook endpoint below."
                   )}
@@ -785,7 +839,7 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
               </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-3 w-full lg:w-auto lg:min-w-[420px]">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-3 w-full lg:w-auto lg:min-w-[540px]">
               <div className="flex flex-col flex-1 min-w-0">
                 <label htmlFor="webhook-url-input" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Webhook URL</label>
                 <input
@@ -794,55 +848,88 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
                   placeholder="https://core.sheikh/api/v1/webhooks"
                   value={directWebhookInput}
                   onChange={(e) => setDirectWebhookInput(e.target.value)}
-                  className="w-full bg-[#050810] border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500 h-10 select-all"
+                  className="w-full bg-[#05070f] border border-slate-800/90 hover:border-indigo-500/40 focus:border-indigo-500 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/10 h-10 select-all transition-all duration-300 placeholder-slate-600 shadow-inner"
                 />
+              </div>
+              <div className="flex flex-col shrink-0 sm:w-[130px]">
+                <label htmlFor="simulate-status-select" className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Simulated Status</label>
+                <select
+                  id="simulate-status-select"
+                  value={simulateStatusCode}
+                  onChange={(e) => setSimulateStatusCode(Number(e.target.value))}
+                  className="w-full bg-[#05070f] border border-slate-800/90 hover:border-indigo-500/40 focus:border-indigo-500 rounded-xl px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/10 h-10 cursor-pointer transition-all duration-300 shadow-inner"
+                >
+                  <option value={200}>200 OK</option>
+                  <option value={201}>201 Created</option>
+                  <option value={400}>400 Bad Request</option>
+                  <option value={401}>401 Unauthorized</option>
+                  <option value={403}>403 Forbidden</option>
+                  <option value={404}>404 Not Found</option>
+                  <option value={500}>500 Error</option>
+                </select>
               </div>
               <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
                 <button
+                  id="register-webhook-btn"
+                  disabled={isRegistering}
                   onClick={() => {
                     if (!directWebhookInput) return;
                     if (!directWebhookInput.startsWith('http://') && !directWebhookInput.startsWith('https://')) {
                       alert('Please enter a valid URL starting with http:// or https://');
                       return;
                     }
-                    setRegisteredWebhookUrl(directWebhookInput);
-                    setShowWebhookSuccessMsg(true);
-                    setTimeout(() => setShowWebhookSuccessMsg(false), 3500);
-                    
-                    // Add to webhooks list if it doesn't exist
-                    const alreadyExists = webhooks.some(w => w.url === directWebhookInput);
-                    if (!alreadyExists) {
-                      const newWh: WebhookConfig = {
-                        id: `wh_direct_${Math.random().toString(36).substring(2, 6)}`,
-                        url: directWebhookInput,
-                        events: ['SUCCESS', 'ROLLBACKED'],
-                        secret: `whsec_direct_${Math.random().toString(36).substring(2, 10)}`,
-                        status: 'active',
-                        createdTime: new Date().toLocaleString()
-                      };
-                      setWebhooks(prev => [...prev, newWh]);
-                    }
+                    setIsRegistering(true);
+                    setTimeout(() => {
+                      setRegisteredWebhookUrl(directWebhookInput);
+                      setShowWebhookSuccessMsg(true);
+                      setTimeout(() => setShowWebhookSuccessMsg(false), 3500);
+                      
+                      // Add to webhooks list if it doesn't exist
+                      const alreadyExists = webhooks.some(w => w.url === directWebhookInput);
+                      if (!alreadyExists) {
+                        const newWh: WebhookConfig = {
+                           id: `wh_direct_${Math.random().toString(36).substring(2, 6)}`,
+                           url: directWebhookInput,
+                           events: ['SUCCESS', 'ROLLBACKED'],
+                           secret: `whsec_direct_${Math.random().toString(36).substring(2, 10)}`,
+                           status: 'active',
+                           createdTime: new Date().toLocaleString()
+                        };
+                        setWebhooks(prev => [...prev, newWh]);
+                      }
+                      setIsRegistering(false);
+                    }, 800);
                   }}
-                  className="flex-1 sm:flex-initial justify-center bg-indigo-650 hover:bg-indigo-600 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow transition-all cursor-pointer flex items-center gap-1.5 h-10 shrink-0"
+                  className={`flex-1 sm:flex-initial justify-center text-white font-bold text-xs py-2.5 px-5 rounded-xl shadow-lg shadow-indigo-500/10 cursor-pointer flex items-center gap-1.5 h-10 shrink-0 transition-all duration-300 active:scale-[0.97] border ${
+                    isRegistering
+                      ? 'bg-gradient-to-r from-emerald-600 to-teal-600 border-emerald-500/30 animate-pulse shadow-emerald-500/20 text-emerald-100 cursor-wait'
+                      : 'bg-gradient-to-r from-indigo-600 to-violet-700 hover:from-indigo-500 hover:to-violet-600 border-indigo-500/30 hover:border-indigo-400/40 hover:shadow-indigo-500/20'
+                  }`}
                 >
-                  <Check className="h-3.5 w-3.5" />
-                  Register
+                  {isRegistering ? (
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin text-emerald-200" />
+                  ) : (
+                    <Check className="h-3.5 w-3.5" />
+                  )}
+                  {isRegistering ? 'Registering...' : 'Register'}
                 </button>
-
-                {registeredWebhookUrl && (
-                  <button
-                    onClick={handleTestDirectConnection}
-                    disabled={isTestingDirectConnection}
-                    className="flex-1 sm:flex-initial justify-center bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-indigo-300 hover:text-indigo-200 border border-slate-700 font-bold text-xs py-2.5 px-4 rounded-xl shadow transition-all cursor-pointer flex items-center gap-1.5 h-10 shrink-0"
-                  >
-                    {isTestingDirectConnection ? (
-                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Activity className="h-3.5 w-3.5" />
-                    )}
-                    Test Connection
-                  </button>
-                )}
+                <button
+                  id="test-connection-btn"
+                  onClick={handleTestDirectConnection}
+                  disabled={isTestingDirectConnection || !registeredWebhookUrl}
+                  className={`flex-1 sm:flex-initial justify-center font-semibold text-xs py-2.5 px-5 rounded-xl border active:scale-[0.97] transition-all duration-300 cursor-pointer flex items-center gap-1.5 h-10 shrink-0 shadow-md ${
+                    isTestingDirectConnection
+                      ? 'bg-gradient-to-r from-indigo-950/80 to-purple-950/80 text-indigo-200 border-indigo-500/40 animate-pulse shadow-lg shadow-indigo-500/10 cursor-wait'
+                      : 'bg-gradient-to-r from-slate-900/40 to-slate-850/40 hover:from-slate-850/60 hover:to-slate-800/60 disabled:opacity-40 disabled:cursor-not-allowed text-indigo-400 hover:text-indigo-300 border-slate-800/80 hover:border-indigo-500/30 shadow-indigo-950/20'
+                  }`}
+                >
+                  {isTestingDirectConnection ? (
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin text-indigo-400" />
+                  ) : (
+                    <Activity className="h-3.5 w-3.5" />
+                  )}
+                  {isTestingDirectConnection ? 'Testing...' : 'Test Connection'}
+                </button>
               </div>
             </div>
           </div>
@@ -859,50 +946,76 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
 
           {/* Connection Logs Section */}
           {directConnectionLogs.length > 0 && (
-            <div className="mt-4 bg-[#050810]/90 border border-slate-800 rounded-xl p-4 animate-fadeIn text-xs">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-3">
+            <div className="mt-5 bg-gradient-to-b from-[#0a0f20] to-[#05070e] backdrop-blur-md border border-indigo-500/20 rounded-2xl p-5 animate-fadeIn text-xs shadow-2xl shadow-indigo-950/40 relative">
+              <div className="absolute top-0 right-10 w-[180px] h-[90px] bg-indigo-500/10 rounded-full filter blur-[30px] pointer-events-none" />
+              <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent pointer-events-none" />
+              
+              <div className="flex items-center justify-between border-b border-slate-800/80 pb-3 mb-4">
                 <div className="flex items-center gap-2 font-semibold text-slate-200">
                   <Terminal className="h-4 w-4 text-indigo-400" />
-                  <span>Connection Logs (সংযোগ পরীক্ষা লগসমূহ)</span>
+                  <span className="tracking-wide text-xs">Connection Logs (কানেকশন লগসমূহ)</span>
                 </div>
                 <button
                   onClick={() => {
                     setDirectConnectionLogs([]);
                     setDirectConnectionLog(null);
                   }}
-                  className="text-[10px] text-slate-500 hover:text-red-400 font-mono flex items-center gap-1 transition-all"
+                  className="text-[10px] text-slate-400 hover:text-red-400 font-mono flex items-center gap-1 transition-all cursor-pointer bg-slate-900/60 hover:bg-slate-900/90 border border-slate-800/60 rounded-lg px-2.5 py-1 shadow-md"
                 >
-                  <Trash2 className="h-3 w-3" /> Clear History
+                  <Trash2 className="h-3 w-3" /> Clear Logs
                 </button>
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
                 {/* Logs History List */}
                 <div className="lg:col-span-5 border-b lg:border-b-0 lg:border-r border-slate-800/60 pb-4 lg:pb-0 pr-0 lg:pr-4 space-y-2 max-h-[300px] overflow-y-auto scrollbar-thin">
-                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Test History</div>
+                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 flex justify-between items-center">
+                    <span>Recent Dispatches</span>
+                    <span className="text-[9px] bg-slate-950/80 border border-slate-850/60 px-2 py-0.5 rounded font-mono text-indigo-400 font-bold">
+                      {directConnectionLogs.length} LOGS
+                    </span>
+                  </div>
                   {directConnectionLogs.map((log) => {
                     const isSelected = directConnectionLog?.id === log.id;
+                    const eventType = log.payload?.event || 'TEST_CONNECTION';
+                    
                     return (
                       <button
                         key={log.id}
                         onClick={() => setDirectConnectionLog(log)}
-                        className={`w-full text-left p-2.5 rounded-lg border transition-all flex flex-col gap-1.5 ${
+                        className={`w-full text-left p-3 rounded-xl border transition-all flex flex-col gap-2 ${
                           isSelected
-                            ? 'bg-indigo-950/25 border-indigo-500/40 text-slate-200'
-                            : 'bg-[#080B13]/40 border-slate-900/80 text-slate-400 hover:text-slate-200 hover:bg-[#080B13]/70'
+                            ? 'bg-gradient-to-r from-indigo-950/40 to-slate-900/30 border-indigo-500/30 text-indigo-300 shadow-md shadow-indigo-950/20'
+                            : 'bg-slate-950/20 border-slate-900/80 hover:border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-950/55'
                         }`}
                       >
                         <div className="flex items-center justify-between">
-                          <span className="font-mono text-[10px] text-slate-500">{log.timestamp}</span>
-                          <span className="text-[10px] font-mono text-indigo-400 font-bold">{log.latency}ms</span>
+                          <span className={`text-[8px] font-mono font-bold tracking-wider px-1.5 py-0.5 rounded shrink-0 uppercase ${
+                            eventType === 'SUCCESS'
+                              ? 'bg-emerald-500/10 text-emerald-400'
+                              : eventType === 'ROLLBACKED'
+                              ? 'bg-red-500/10 text-red-400'
+                              : 'bg-sky-500/10 text-sky-400'
+                          }`}>
+                            {eventType}
+                          </span>
+                          <span className="text-[9px] font-mono text-indigo-400 font-bold shrink-0">{log.latency}ms</span>
                         </div>
                         <div className="flex items-center justify-between gap-2">
-                          <span className="truncate max-w-[150px] font-mono text-[11px] text-slate-300">{log.url}</span>
+                          <span className="truncate max-w-[150px] font-mono text-[10px] text-slate-400">{log.url}</span>
                           <div className="flex items-center gap-1 shrink-0">
-                            {log.status === 'SUCCESS' ? (
-                              <span className="text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded text-[9px] font-bold font-mono">{log.responseCode} OK</span>
+                            {log.responseCode >= 200 && log.responseCode < 300 ? (
+                              <span className="text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded text-[9px] font-bold font-mono">
+                                {log.responseCode} {log.responseCode === 201 ? 'CREATED' : 'OK'}
+                              </span>
+                            ) : log.responseCode === 404 ? (
+                              <span className="text-red-400 bg-red-500/10 border border-red-500/20 px-1.5 py-0.5 rounded text-[9px] font-bold font-mono">
+                                404 NOT FOUND
+                              </span>
                             ) : (
-                              <span className="text-red-400 bg-red-500/10 px-1.5 py-0.5 rounded text-[9px] font-bold font-mono">{log.responseCode || 'ERR'}</span>
+                              <span className="text-red-400 bg-red-500/10 border border-red-500/20 px-1.5 py-0.5 rounded text-[9px] font-bold font-mono">
+                                {log.responseCode || 'ERR'} {log.responseText ? log.responseText.toUpperCase() : 'FAILED'}
+                              </span>
                             )}
                           </div>
                         </div>
@@ -912,37 +1025,44 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
                 </div>
 
                 {/* Log Details Panel */}
-                <div className="lg:col-span-7 bg-[#03050a] border border-slate-900 rounded-lg p-3 space-y-3">
+                <div className="lg:col-span-7 bg-[#03050a]/90 border border-slate-800/60 rounded-xl p-4 space-y-3.5 shadow-inner">
                   {directConnectionLog ? (
                     <>
                       <div className="flex items-center justify-between text-[10px] border-b border-slate-800/60 pb-2">
-                        <span className="text-slate-400 font-bold uppercase tracking-wider">Log Details</span>
+                        <span className="text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                          <span className={`h-2 w-2 rounded-full ${directConnectionLog.responseCode >= 200 && directConnectionLog.responseCode < 300 ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`} />
+                          Log Details
+                        </span>
                         <span className="font-mono text-slate-500">ID: {directConnectionLog.id}</span>
                       </div>
-                      <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px] font-mono">
                         <div className="space-y-1">
-                          <div className="text-slate-500">Target URL:</div>
-                          <div className="text-slate-300 break-all select-all">{directConnectionLog.url}</div>
+                          <div className="text-slate-500">Target Endpoint:</div>
+                          <div className="text-slate-300 break-all select-all font-semibold">{directConnectionLog.url}</div>
                         </div>
                         <div className="space-y-1">
-                          <div className="text-slate-500">Latency & Response:</div>
+                          <div className="text-slate-500">Latency & Status:</div>
                           <div className="flex items-center gap-2">
                             <span className="text-indigo-400 font-bold">{directConnectionLog.latency}ms</span>
-                            <span className={directConnectionLog.responseCode >= 200 && directConnectionLog.responseCode < 300 ? "text-emerald-400 font-bold" : "text-red-400 font-bold"}>
-                              Code {directConnectionLog.responseCode || 'N/A'}
+                            <span className={`font-bold px-1.5 py-0.5 rounded text-[9px] ${
+                              directConnectionLog.responseCode >= 200 && directConnectionLog.responseCode < 300 
+                                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
+                                : "bg-red-500/10 text-red-400 border border-red-500/20"
+                            }`}>
+                              HTTP {directConnectionLog.responseCode || '0'} — {directConnectionLog.responseText || 'Error'}
                             </span>
                           </div>
                         </div>
                       </div>
                       <div className="space-y-1 text-[11px] font-mono">
-                        <span className="text-slate-500">Response Message:</span>
-                        <div className="p-2 bg-slate-950 rounded border border-slate-900 text-slate-300 select-all max-h-[60px] overflow-y-auto scrollbar-thin">
+                        <span className="text-slate-500">Response Text:</span>
+                        <div className="p-2.5 bg-[#020306] rounded-xl border border-slate-900 text-slate-300 select-all max-h-[60px] overflow-y-auto scrollbar-thin shadow-inner">
                           {directConnectionLog.responseText}
                         </div>
                       </div>
                       <div className="space-y-1">
                         <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Dispatched Payload (JSON)</span>
-                        <pre className="p-2 bg-slate-950 rounded border border-slate-900 overflow-x-auto text-[10px] leading-relaxed text-indigo-300/90 max-h-[120px] scrollbar-thin font-mono">
+                        <pre className="p-3 bg-[#020306] rounded-xl border border-slate-900 overflow-x-auto text-[10px] leading-relaxed text-indigo-300/90 max-h-[120px] scrollbar-thin font-mono shadow-inner">
                           {JSON.stringify(directConnectionLog.payload, null, 2)}
                         </pre>
                       </div>
@@ -950,7 +1070,7 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500">
                       <Terminal className="h-8 w-8 text-slate-600 mb-2 animate-pulse" />
-                      <p className="text-xs">Select a connection test attempt from the left panel to inspect details.</p>
+                      <p className="text-xs">Select a connection test attempt or a recent transaction dispatch from the left panel to inspect details.</p>
                     </div>
                   )}
                 </div>
@@ -972,7 +1092,7 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
                 {/* Endpoint Selection */}
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">পদ্ধতি ও শেষবিন্দু (Select Route)</label>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <button
                       onClick={() => {
                         setApiEndpoint('stripe');
@@ -1388,7 +1508,7 @@ export const FusionPayConsole: React.FC<FusionPayConsoleProps> = ({
 
                     <div className="space-y-2">
                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">নিবন্ধিত ইভেন্টসমূহ (Subscribe to Events)</label>
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         <label className="flex items-center gap-2 bg-[#080B13]/40 border border-slate-850 p-2.5 rounded-xl cursor-pointer select-none hover:border-slate-800 transition-all">
                           <input
                             type="checkbox"
